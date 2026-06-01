@@ -163,7 +163,11 @@ public class Config {
 	
 	public static boolean isLogicBlox() {
 		return platform.contentEquals("lb");
-	}	
+	}
+
+	public static boolean isDuckDB() {
+		return platform.contentEquals("duck");
+	}
 	
 	public static boolean isAnswerEnabled() {
 		return answerEnabled;

@@ -48,7 +48,20 @@ echo #### Step 3: Convert Dataset Sources into CSV files (End) ####
 
 echo #### Step 4:  Prepare DB snapshots for Experiments (Start) ####
 cd ~/src/pg-view/experiment
-./prep_db_snapshots.sh -p lb pg n4 -d soc oag word prov lsqb
+
+# Choose which backends to prepare snapshots for.
+# DuckDB and PostgreSQL are available without additional software.
+# LogicBlox (lb) and Neo4j (n4) require separate installations; omit them
+# if those tools are not installed.
+PLATFORMS="duck pg"
+
+# Uncomment to include LogicBlox (requires lb services start):
+# PLATFORMS="$PLATFORMS lb"
+
+# Uncomment to include Neo4j (requires neo4j-community installation):
+# PLATFORMS="$PLATFORMS n4"
+
+./prep_db_snapshots.sh -p $PLATFORMS -d soc oag word prov lsqb
 echo #### Step 4:  Prepare DB snapshots for Experiments (End) ####
 
 

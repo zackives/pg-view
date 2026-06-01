@@ -75,8 +75,8 @@ public class Z3Tester {
 
 		fp.addRule(q, null);
 		
-		IntExpr int1 = (IntExpr)ctx.mkBound(1, I);
-		IntExpr int2 = (IntExpr)ctx.mkBound(2, I);
+		IntExpr int1 = (IntExpr)(Expr<?>)ctx.mkBound(1, I);
+		IntExpr int2 = (IntExpr)(Expr<?>)ctx.mkBound(2, I);
 		fp.addRule(ctx.mkImplies((BoolExpr)rel.apply(int1, int2), (BoolExpr)rel.apply(int1, int2)), 
 				ctx.mkSymbol("GOGO"));
 

@@ -187,17 +187,24 @@ public class CommandExecutor {
 		
 		Config.setPlatform(platform);
 		StoreFactory storeFactory = new StoreFactory();
-	
+
+		// LogicBlox requires a secondary internal connection in addition to the
+		// primary store connection. Skip this block entirely when not using LB
+		// so that missing LB binaries do not prevent other backends from starting.
 		if (platform.contentEquals("lb") == true) {
-			storeLB = storeFactory.getStore("lb");
-			if (storeLB.connect() == true) {
-				Util.Console.logln("Use LB internally.");
-				status = Status.CONNECT;
-			} else {
-				Util.Console.errln("Platform [LB] is unavailable.");
-				Util.Console.errln("Check your configuration file [" 
-						+ Config.getConfigFile() + "] and the server.");
-			}		
+			try {
+				storeLB = storeFactory.getStore("lb");
+				if (storeLB.connect() == true) {
+					Util.Console.logln("Use LB internally.");
+					status = Status.CONNECT;
+				} else {
+					Util.Console.errln("Platform [LB] is unavailable.");
+					Util.Console.errln("Check your configuration file ["
+							+ Config.getConfigFile() + "] and the server.");
+				}
+			} catch (Exception e) {
+				Util.Console.errln("LogicBlox connection failed: " + e.getMessage());
+			}
 		}
 		
 		store = storeFactory.getStore(platform);
@@ -862,11 +869,30 @@ public class CommandExecutor {
 		} else if (platform.contentEquals("pg") == true) {
 			System.out.println("[CommandExecutor] prepareDatabase PG");
 			String filePath = "experiment/dataset/snapshots/postgres/"+ dirPath + ".sql";
-			Postgres.loadDBFromSql("exp", filePath); 
+			Postgres.loadDBFromSql("exp", filePath);
 		} else if (platform.contentEquals("lb") == true) {
 			System.out.println("[CommandExecutor] prepareDatabase LB");
 			String filePath = "experiment/dataset/snapshots/logicblox/"+ dirPath;
 			LogicBlox.loadDBFromBackup("exp", filePath);
+		} else if (platform.contentEquals("duck") == true) {
+			System.out.println("[CommandExecutor] prepareDatabase DuckDB");
+			// DuckDB snapshots are pre-built .duckdb files. Copy it into the
+			// working database directory so the store opens a fresh copy.
+			String snapshotPath = "experiment/dataset/snapshots/duckdb/" + dirPath + ".duckdb";
+			String destPath = Config.get("duckdb.dbdir") != null
+					? Config.get("duckdb.dbdir").trim() + java.io.File.separator + "exp.duckdb"
+					: "duckdbdata" + java.io.File.separator + "exp.duckdb";
+			try {
+				java.nio.file.Files.createDirectories(
+						java.nio.file.Paths.get(destPath).getParent());
+				java.nio.file.Files.copy(
+						java.nio.file.Paths.get(snapshotPath),
+						java.nio.file.Paths.get(destPath),
+						java.nio.file.StandardCopyOption.REPLACE_EXISTING);
+				store.useDatabase("exp");
+			} catch (java.io.IOException e) {
+				Util.Console.errln("[DuckDB] Could not load snapshot [" + snapshotPath + "]: " + e.getMessage());
+			}
 		}
 
 		long et = Util.getElapsedTime(tid);
@@ -923,12 +949,11 @@ public class CommandExecutor {
 //			System.out.println("[CommandExecutor] rulesForRewriting i[" + i + "]: " + q); //Util.arrayToString(rulesToExecute));
 //		}
 		
-		// Execute the Datalog rules to create indexes
+		// Execute the Datalog rules to create indexes.
+		// createConstructors() sets up the GENNEWID infrastructure (skolem IDs);
+		// call it for every SQL-backed store, not just LogicBlox.
 		int tid2= Util.startTimer();
-		if (Config.isLogicBlox() == true) {
-			LogicBloxStore lbStore = (LogicBloxStore)store;
-			lbStore.createConstructors();
-		}
+		store.createConstructors();
 		store.createView(null, rulesToExecute, true);
 		
 		long et2 = Util.getElapsedTime(tid2);
@@ -1130,13 +1155,15 @@ public class CommandExecutor {
 		return newQuery2;
 	}
 
-	private static DatalogProgram getUnfoldedProgram(DatalogClause newQuery) { 
+	private static DatalogProgram getUnfoldedProgram(DatalogClause newQuery) {
 		DatalogProgram rewrittenProgram = null;
 		if (Config.isLogicBlox() == true || Config.isSimpleDatalog() == true
 				|| Config.isUseQuerySubQueryInPostgres() == true) {
 			DatalogProgram p = GraphTransServer.getProgram();
 			rewrittenProgram = Rewriter.getProgramForRewrittenQuery(p, newQuery);
-		} else if (Config.isPostgres() == true && Config.isUseQuerySubQueryInPostgres() == false) {
+		} else if ((Config.isPostgres() == true || Config.isDuckDB() == true)
+				&& Config.isUseQuerySubQueryInPostgres() == false) {
+			// For relational SQL backends: pass the single query clause through directly.
 			rewrittenProgram = new DatalogProgram();
 			rewrittenProgram.addRule(newQuery);
 		}

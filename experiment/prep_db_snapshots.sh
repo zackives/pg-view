@@ -40,6 +40,7 @@ fi
 RUN_LB=false
 RUN_PG=false
 RUN_N4=false
+RUN_DUCK=false
 
 if [[ "${platforms[@]} " =~ "lb" ]]; then
     RUN_LB=true
@@ -51,6 +52,10 @@ fi
 
 if [[ "${platforms[@]} " =~ "n4" ]]; then
     RUN_N4=true
+fi
+
+if [[ "${platforms[@]} " =~ "duck" ]]; then
+    RUN_DUCK=true
 fi
 
 CURPWD=${PWD}
@@ -123,12 +128,70 @@ fi
 
 
 ############
+# DuckDB
+############
+if $RUN_DUCK; then
+    echo "[Start] Prepare DuckDB database snapshots"
+
+    DUCK_SNAPSHOT_DIR="dataset/snapshots/duckdb"
+    mkdir -p ${DUCK_SNAPSHOT_DIR}
+
+    # Read dbdir from graphview.conf (default: duckdbdata)
+    DUCK_DBDIR=$(grep -A5 '^\[duckdb\]' ../conf/graphview.conf | grep 'dbdir' | cut -d'=' -f2 | awk '{$1=$1};1')
+    DUCK_DBDIR=${DUCK_DBDIR:-duckdbdata}
+    mkdir -p ${DUCK_DBDIR}
+
+    for item in "${datasets[@]}"
+    do
+        echo "Start DuckDB dataset=${item}"
+        date
+
+        DUCK_FILE="${DUCK_DBDIR}/temp_${item}.duckdb"
+        SNAPSHOT_FILE="${DUCK_SNAPSHOT_DIR}/${item}.duckdb"
+
+        CSV_BASE="${CURPWD}/dataset/targets/${item}"
+        CSV_NODE="${CSV_BASE}/node.csv"
+        CSV_EDGE="${CSV_BASE}/edge.csv"
+
+        # Remove any previous temp db
+        rm -f "${DUCK_FILE}"
+
+        # Load data into a DuckDB file via inline SQL
+        duckdb "${DUCK_FILE}" <<SQL
+CREATE TABLE n_g (_0 INTEGER NOT NULL, _1 VARCHAR(1024));
+CREATE TABLE e_g (_0 INTEGER NOT NULL, _1 INTEGER NOT NULL, _2 INTEGER NOT NULL, _3 VARCHAR(1024));
+COPY n_g (_0, _1) FROM '${CSV_NODE}' (FORMAT CSV, HEADER TRUE);
+COPY e_g (_0, _1, _2, _3) FROM '${CSV_EDGE}' (FORMAT CSV, HEADER TRUE);
+CREATE INDEX n_g__0 ON n_g (_0);
+CREATE INDEX n_g__1 ON n_g (_1);
+CREATE INDEX e_g__0 ON e_g (_0);
+CREATE INDEX e_g__1 ON e_g (_1);
+CREATE INDEX e_g__2 ON e_g (_2);
+CREATE INDEX e_g__3 ON e_g (_3);
+SQL
+
+        cp "${DUCK_FILE}" "${SNAPSHOT_FILE}"
+        rm -f "${DUCK_FILE}"
+        echo "Saved DuckDB snapshot to ${SNAPSHOT_FILE}"
+    done
+
+    echo "[End] Prepare DuckDB database snapshots"
+fi
+
+
+############
 # LogicBlox
 ############
 
 #Import to LB from CSV
-#LB_BASEDIR=~/tools/logicblox/bin
-#LB_BASEDIR=~/tools/logicblox/bin
+if $RUN_LB; then
+    # Check that the lb binary is available before proceeding.
+    if [ -z "${LB_BASEDIR}" ] || [ ! -f "${LB_BASEDIR}/lb" ]; then
+        echo "WARNING: LogicBlox binary not found at [${LB_BASEDIR}/lb]. Skipping LB snapshots."
+        echo "         Set logicblox.lb_bin_dir in conf/graphview.conf and ensure lb services are running."
+        RUN_LB=false
+    fi
+fi
 
 if $RUN_LB; then
     echo "LB_BASEDIR: ${LB_BASEDIR}"

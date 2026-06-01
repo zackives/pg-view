@@ -1,5 +1,6 @@
 package edu.upenn.cis.db.graphtrans.store;
 
+import edu.upenn.cis.db.graphtrans.store.duckdb.DuckDBStore;
 import edu.upenn.cis.db.graphtrans.store.logicblox.LogicBloxStore;
 import edu.upenn.cis.db.graphtrans.store.neo4j.Neo4jStore;
 import edu.upenn.cis.db.graphtrans.store.postgres.PostgresStore;
@@ -17,6 +18,8 @@ public class StoreFactory {
 			return new Neo4jStore();
 		} else if (storeType.equalsIgnoreCase("sd")) {
 			return new SimpleDatalogStore();
+		} else if (storeType.equalsIgnoreCase("duck")) {
+			return new DuckDBStore();
 		}
 		throw new UnsupportedOperationException("Not supported platform [" + storeType +"]");
 	}

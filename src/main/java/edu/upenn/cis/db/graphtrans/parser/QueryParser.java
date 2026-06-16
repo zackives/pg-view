@@ -97,60 +97,174 @@ public class QueryParser extends GraphTransQueryBaseVisitor<Void> {
 		return clause;
 	}
 
+	private int nodeCounter = 0;
+	private int edgeCounter = 0;
+	private int funcCounter = 0;
+	
+	private void parseNodeProperties(String var, GraphTransQueryParser.Term_bodyContext termCtx) {
+		if (termCtx.properties() != null) {
+			for (GraphTransQueryParser.Property_pairContext pair : termCtx.properties().property_pair()) {
+				String propName = pair.prop().getText();
+				String propVal = pair.propValue().getText();
+				ParserHelper.processWhereCondition(var, propName, "=", propVal, false, clause.getBody(), propertyAtoms, null, null);
+			}
+		}
+	}
+	
+	private void parseEdgeProperties(String var, GraphTransQueryParser.Edge_term_bodyContext edgeCtx) {
+		if (edgeCtx.properties() != null) {
+			for (GraphTransQueryParser.Property_pairContext pair : edgeCtx.properties().property_pair()) {
+				String propName = pair.prop().getText();
+				String propVal = pair.propValue().getText();
+				ParserHelper.processWhereCondition(var, propName, "=", propVal, false, clause.getBody(), propertyAtoms, null, null);
+			}
+		}
+	}
+
+	private String resolveFuncArg(GraphTransQueryParser.FuncArgContext ctx) {
+		if (ctx.lop() != null) {
+			return resolveLop(ctx.lop());
+		} else if (ctx.rop() != null) {
+			return resolveRop(ctx.rop());
+		} else {
+			return ctx.getText();
+		}
+	}
+
+	private String resolveLop(GraphTransQueryParser.LopContext ctx) {
+		if (ctx.funcCall() != null) {
+			return parseFuncCall(ctx.funcCall());
+		} else {
+			String var = ctx.var().getText();
+			if (ctx.prop() != null) {
+				String prop = ctx.prop().getText();
+				if (!propertyAtoms.containsKey(var)) {
+					propertyAtoms.put(var, new HashMap<String, ArrayList<Atom>>());
+				}
+				if (!propertyAtoms.get(var).containsKey(prop)) {
+					propertyAtoms.get(var).put(prop, new ArrayList<Atom>());
+				}
+				return var + "_" + prop + "_val";
+			} else {
+				return var;
+			}
+		}
+	}
+
+	private String resolveRop(GraphTransQueryParser.RopContext ctx) {
+		if (ctx.funcCall() != null) {
+			return parseFuncCall(ctx.funcCall());
+		} else if (ctx.propValue() != null) {
+			return ctx.propValue().getText();
+		} else if (ctx.var() != null) {
+			String var = ctx.var().getText();
+			if (ctx.prop() != null) {
+				String prop = ctx.prop().getText();
+				if (!propertyAtoms.containsKey(var)) {
+					propertyAtoms.put(var, new HashMap<String, ArrayList<Atom>>());
+				}
+				if (!propertyAtoms.get(var).containsKey(prop)) {
+					propertyAtoms.get(var).put(prop, new ArrayList<Atom>());
+				}
+				return var + "_" + prop + "_val";
+			} else {
+				return var;
+			}
+		} else {
+			return ctx.getText();
+		}
+	}
+
+	private String parseFuncCall(GraphTransQueryParser.FuncCallContext ctx) {
+		String retVar = "f_" + (funcCounter++);
+		StringBuilder fullName = new StringBuilder();
+		for (int i = 0; i < ctx.ID().size(); i++) {
+			if (i > 0) {
+				fullName.append(".");
+			}
+			fullName.append(ctx.ID(i).getText());
+		}
+		Atom a = new Atom(new Predicate(fullName.toString()));
+		for (GraphTransQueryParser.FuncArgContext argCtx : ctx.funcArg()) {
+			String argVal = resolveFuncArg(argCtx);
+			boolean isVar = !argVal.startsWith("\"") && !argVal.startsWith("'") && !argVal.matches("-?\\d+(\\.\\d+)?");
+			a.appendTerm(new Term(argVal, isVar));
+		}
+		a.appendTerm(new Term(retVar, true));
+		clause.addAtomToBody(a);
+		return retVar;
+	}
+
 	@Override 
 	public Void visitMatch_clause(GraphTransQueryParser.Match_clauseContext ctx) 
 	{
 		for (int i = 0; i < ctx.hop_or_terms().hop_or_term().size(); i++) {
 			if (ctx.hop_or_terms().hop_or_term(i).term() == null) {				
 				HopContext hopCtx = ctx.hop_or_terms().hop_or_term(i).hop();
+				
+				GraphTransQueryParser.Term_bodyContext fromCtx = hopCtx.term(0).term_body();
+				GraphTransQueryParser.Term_bodyContext toCtx = hopCtx.term(1).term_body();
+				
 				// from
-				String from = hopCtx.term(0).term_body().var().getText();
-				if (hopCtx.term(0).term_body().label() != null) {
-					String label = hopCtx.term(0).term_body().label().getText();
+				String from = (fromCtx.var() != null) ? fromCtx.var().getText() : "n_" + (nodeCounter++);
+				if (fromCtx.label() != null) {
+					String label = fromCtx.label().getText();
 					nodeVarToLabelMap.put(from, Util.addQuotes(label));
 				}
+				parseNodeProperties(from, fromCtx);
 	
 				// to
-				String to = hopCtx.term(1).term_body().var().getText();
-				if (hopCtx.term(1).term_body().label() != null) {
-					String label = hopCtx.term(1).term_body().label().getText();	
+				String to = (toCtx.var() != null) ? toCtx.var().getText() : "n_" + (nodeCounter++);
+				if (toCtx.label() != null) {
+					String label = toCtx.label().getText();	
 					nodeVarToLabelMap.put(to, Util.addQuotes(label));
 				}
+				parseNodeProperties(to, toCtx);
 	
 				// via
-				String var = hopCtx.edge_term().edge_term_body().var().getText();
-				String label = hopCtx.edge_term().edge_term_body().labelRegEx().getText();
+				GraphTransQueryParser.Edge_term_bodyContext edgeCtx = hopCtx.edge_term().edge_term_body();
+				String var = (edgeCtx.var() != null) ? edgeCtx.var().getText() : "e_" + (edgeCounter++);
 				
-//				System.out.println("CODE 412412 label: " + label);
+				if (edgeCtx.SIM_OP() != null) {
+					String op = edgeCtx.SIM_OP().getText();
+					String threshold = "0.0";
+					if (edgeCtx.properties() != null) {
+						for (GraphTransQueryParser.Property_pairContext pair : edgeCtx.properties().property_pair()) {
+							if (pair.prop().getText().equals("threshold")) {
+								threshold = pair.propValue().getText();
+							}
+						}
+					}
+					Atom a = new Atom(Config.predSimEdge);
+					a.appendTerm(new Term(var, true));
+					a.appendTerm(new Term(from, true));
+					a.appendTerm(new Term(to, true));
+					a.appendTerm(new Term(Util.addQuotes(op), false));
+					a.appendTerm(new Term(threshold, false));
+					clause.addAtomToBody(a);
+				} else {
+					String label = (edgeCtx.labelRegEx() != null) ? edgeCtx.labelRegEx().getText() : "";
+					
+					Atom a = new Atom(Config.predE);
+					a.appendTerm(new Term(var, true));
+					a.appendTerm(new Term(from, true));
+					a.appendTerm(new Term(to, true));
+					a.appendTerm(new Term(Util.addQuotes(label), false));
 				
-				Atom a = new Atom(Config.predE);
-				a.appendTerm(new Term(var, true));
-				a.appendTerm(new Term(from, true));
-				a.appendTerm(new Term(to, true));
-				a.appendTerm(new Term(Util.addQuotes(label), false));
-			
-				clause.addAtomToBody(a);
-				
-//					a.appendTerm(new Term(var + "_label", true));
-//					
-//					Atom b = new Atom(Config.predOpEq);
-//					b.appendTerm(new Term(var + "_label", true));
-//					b.appendTerm(new Term(Util.addQuotes(label), false));
-//					
-//					edgeVarToAtomMap.put(var, a);
-//					
-//					clause.addAtomToBody(a);
-//					clause.addAtomToBody(b);				
+					clause.addAtomToBody(a);
+					parseEdgeProperties(var, edgeCtx);
+				}
 			} else { // term
-				Term_bodyContext termCtx = ctx.hop_or_terms().hop_or_term(i).term().term_body();
+				GraphTransQueryParser.Term_bodyContext termCtx = ctx.hop_or_terms().hop_or_term(i).term().term_body();
 				
-				String var = termCtx.var().getText();
+				String var = (termCtx.var() != null) ? termCtx.var().getText() : "n_" + (nodeCounter++);
 				if (termCtx.label() != null) {
 					String label = termCtx.label().getText();
 					nodeVarToLabelMap.put(var, Util.addQuotes(label));
 				} else {
 					throw new IllegalArgumentException("Single node[" + var + "] should have a label");	
 				}
+				parseNodeProperties(var, termCtx);
 			}
 		}
 
@@ -162,14 +276,10 @@ public class QueryParser extends GraphTransQueryBaseVisitor<Void> {
 			
 			a.appendTerm(new Term(var, true));
 			a.appendTerm(new Term(label, false));
-//			Atom b = new Atom(Config.predOpEq);
-//			b.appendTerm(new Term(var + "_label", true));
-//			b.appendTerm(new Term(label, false));
 			
 			nodeVarToAtomMap.put(var, a);
 			
 			clause.addAtomToBody(a);
-//			clause.addAtomToBody(b);				
 		}
 		
 		return visitChildren(ctx); 
@@ -189,30 +299,55 @@ public class QueryParser extends GraphTransQueryBaseVisitor<Void> {
 	}
 
 	@Override public Void visitWhere_condition(GraphTransQueryParser.Where_conditionContext ctx) {
-		String var = ctx.lop().var().getText();
-		String prop = "";
-		if (ctx.lop().prop() != null) {
-			prop = ctx.lop().prop().getText();
-		}
-
 		String op = ctx.operator().getText();
-
-		String rvar;
-		if (ctx.rop().var() != null) {
-			rvar = ctx.rop().var().getText();
-//			System.out.println("CODE 4114 - rvar: " + rvar);			
-		} else if (ctx.rop().propValue() != null) {
-//			String rvar = ctx.rop().var().getText();
-			String val = ctx.rop().propValue().int_or_literal().getText();		
-			ParserHelper.processWhereCondition(var, prop, op, val, false, clause.getBody(), propertyAtoms, null, null);
-			
-//			throw new IllegalArgumentException("rop propValue is not supported yet ctx.rop: " + ctx.rop().getText());
-		} else if (ctx.rop().prop() == null) {
-			throw new IllegalArgumentException("rop prop is not supported yet ctx.rop: " + ctx.rop().getText());
-	//		ParserHelper.processWhereCondition(var, prop, op, val, clause.getBody(), propertyAtoms, null, null);
-			//ParserHelper.processWhereCondition(var, prop, op, val, clause.getBody(), propertyAtoms, null, null);
+		
+		String lopVal;
+		if (ctx.lop().funcCall() != null) {
+			lopVal = parseFuncCall(ctx.lop().funcCall());
+		} else {
+			String var = ctx.lop().var().getText();
+			if (ctx.lop().prop() != null) {
+				String prop = ctx.lop().prop().getText();
+				if (!propertyAtoms.containsKey(var)) {
+					propertyAtoms.put(var, new HashMap<String, ArrayList<Atom>>());
+				}
+				if (!propertyAtoms.get(var).containsKey(prop)) {
+					propertyAtoms.get(var).put(prop, new ArrayList<Atom>());
+				}
+				lopVal = var + "_" + prop + "_val";
+			} else {
+				lopVal = var;
+			}
 		}
-		return visitChildren(ctx); 
+
+		String ropVal;
+		boolean ropIsVar = false;
+		if (ctx.rop().funcCall() != null) {
+			ropVal = parseFuncCall(ctx.rop().funcCall());
+			ropIsVar = true;
+		} else if (ctx.rop().propValue() != null) {
+			ropVal = ctx.rop().propValue().getText();
+			ropIsVar = false;
+		} else {
+			String var = ctx.rop().var().getText();
+			if (ctx.rop().prop() != null) {
+				String prop = ctx.rop().prop().getText();
+				if (!propertyAtoms.containsKey(var)) {
+					propertyAtoms.put(var, new HashMap<String, ArrayList<Atom>>());
+				}
+				if (!propertyAtoms.get(var).containsKey(prop)) {
+					propertyAtoms.get(var).put(prop, new ArrayList<Atom>());
+				}
+				ropVal = var + "_" + prop + "_val";
+				ropIsVar = true;
+			} else {
+				ropVal = var;
+				ropIsVar = true;
+			}
+		}
+
+		ParserHelper.processWhereCondition(lopVal, "", op, ropVal, ropIsVar, clause.getBody(), propertyAtoms, null, null);
+		return null;
 	}
 	
 	@Override public Void visitReturn_clause(GraphTransQueryParser.Return_clauseContext ctx) {

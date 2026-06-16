@@ -39,6 +39,7 @@ import edu.upenn.cis.db.graphtrans.store.Store;
 import edu.upenn.cis.db.graphtrans.store.StoreResultSet;
 import edu.upenn.cis.db.helper.Util;
 import edu.upenn.cis.db.postgres.Postgres;
+import edu.upenn.cis.db.graphtrans.catalog.SchemaMapping;
 
 public class PostgresStore implements Store {
 	final static Logger logger = LogManager.getLogger(PostgresStore.class);
@@ -188,7 +189,250 @@ public class PostgresStore implements Store {
 		// TODO Auto-generated method stub
 	}
 
+	public String getSqlForDatalogClauseWithMapping(DatalogClause c, SchemaMapping mapping, String dialect) {
+		HashMap<String, String> varToNodeLabel = new HashMap<String, String>();
+		HashMap<String, String> varToEdgeLabel = new HashMap<String, String>();
+		for (Atom a : c.getBody()) {
+			if (a.isInterpreted() == false) {
+				String relName = a.getRelName();
+				if (relName.startsWith("N_") || relName.equals("N")) {
+					String var = a.getTerms().get(0).getVar();
+					String label = Util.removeQuotes(a.getTerms().get(1).toString());
+					varToNodeLabel.put(var, label);
+				} else if (relName.startsWith("E_") || relName.equals("E")) {
+					String var = a.getTerms().get(0).getVar();
+					String label = Util.removeQuotes(a.getTerms().get(3).toString());
+					varToEdgeLabel.put(var, label);
+				}
+			}
+		}
+
+		HashMap<String, String> varToColumnExpr = new HashMap<String, String>();
+		HashMap<String, String[]> valVarToNodeProp = new HashMap<String, String[]>();
+		for (Atom a : c.getBody()) {
+			if (a.isInterpreted() == false) {
+				String relName = a.getRelName();
+				if (relName.startsWith("NP_") || relName.equals("NP")) {
+					String nodeVar = a.getTerms().get(0).getVar();
+					String propName = Util.removeQuotes(a.getTerms().get(1).toString());
+					String valVar = a.getTerms().get(2).getVar();
+					String nodeLabel = varToNodeLabel.get(nodeVar);
+					String colName = mapping.getColumnForNodeProperty(nodeLabel, propName);
+					if (colName != null) {
+						varToColumnExpr.put(valVar, nodeVar + "." + colName);
+					}
+					valVarToNodeProp.put(valVar, new String[]{nodeVar, propName});
+				} else if (relName.startsWith("EP_") || relName.equals("EP")) {
+					String edgeVar = a.getTerms().get(0).getVar();
+					String propName = Util.removeQuotes(a.getTerms().get(1).toString());
+					String valVar = a.getTerms().get(2).getVar();
+					String edgeLabel = varToEdgeLabel.get(edgeVar);
+					String colName = mapping.getColumnForEdgeProperty(edgeLabel, propName);
+					if (colName != null) {
+						varToColumnExpr.put(valVar, edgeVar + "." + colName);
+					}
+				}
+			}
+		}
+
+		for (Atom a : c.getBody()) {
+			if (a.isInterpreted() == false) {
+				String relName = a.getRelName();
+				if (!relName.startsWith("N") && !relName.startsWith("E") && !relName.startsWith("SIM_EDGE")) {
+					int numArgs = a.getTerms().size() - 1;
+					String retVar = a.getTerms().get(numArgs).getVar();
+					String funcExpr = "";
+					if (relName.equalsIgnoreCase("cosine_similarity") || relName.equalsIgnoreCase("l2_distance")) {
+						String propVar = a.getTerms().get(0).getVar();
+						String queryLiteral = a.getTerms().get(1).toString();
+						String modelName = (numArgs > 2) ? a.getTerms().get(2).toString() : null;
+						
+						String embedCol = "gem_embed";
+						String nodeVar = "";
+						if (valVarToNodeProp.containsKey(propVar)) {
+							nodeVar = valVarToNodeProp.get(propVar)[0];
+							String propName = valVarToNodeProp.get(propVar)[1];
+							String nodeLabel = varToNodeLabel.get(nodeVar);
+							SchemaMapping.EmbeddingInfo embedInfo = mapping.getEmbedding(nodeLabel, propName, modelName);
+							if (embedInfo != null) {
+								embedCol = embedInfo.column;
+							}
+						}
+						
+						String leftExpr = nodeVar + "." + embedCol;
+						String rightExpr = "get_embedding(" + queryLiteral + ")";
+						if (dialect.equals("duckdb")) {
+							if (relName.equalsIgnoreCase("cosine_similarity")) {
+								funcExpr = "array_cosine_similarity(" + leftExpr + ", " + rightExpr + ")";
+							} else {
+								funcExpr = "array_distance(" + leftExpr + ", " + rightExpr + ")";
+							}
+						} else {
+							if (relName.equalsIgnoreCase("cosine_similarity")) {
+								funcExpr = "(1 - (" + leftExpr + " <=> " + rightExpr + "))";
+							} else {
+								funcExpr = "(" + leftExpr + " <-> " + rightExpr + ")";
+							}
+						}
+					} else {
+						StringBuilder args = new StringBuilder();
+						for (int k = 0; k < numArgs; k++) {
+							if (k > 0) args.append(", ");
+							String argVal = a.getTerms().get(k).toString();
+							if (varToColumnExpr.containsKey(argVal)) {
+								args.append(varToColumnExpr.get(argVal));
+							} else {
+								args.append(argVal);
+							}
+						}
+						funcExpr = relName + "(" + args.toString() + ")";
+					}
+					varToColumnExpr.put(retVar, funcExpr);
+				}
+			}
+		}
+
+		ArrayList<String> tablesList = new ArrayList<String>();
+		ArrayList<String> joinConditions = new ArrayList<String>();
+
+		for (Map.Entry<String, String> entry : varToNodeLabel.entrySet()) {
+			String var = entry.getKey();
+			String label = entry.getValue();
+			String table = mapping.getTableForNode(label);
+			tablesList.add(table + " AS " + var);
+		}
+
+		for (Atom a : c.getBody()) {
+			if (a.isInterpreted() == false) {
+				String relName = a.getRelName();
+				if (relName.startsWith("E_") || relName.equals("E")) {
+					String edgeVar = a.getTerms().get(0).getVar();
+					String srcVar = a.getTerms().get(1).getVar();
+					String tgtVar = a.getTerms().get(2).getVar();
+					String edgeLabel = Util.removeQuotes(a.getTerms().get(3).toString());
+
+					SchemaMapping.EdgeMapping em = mapping.edges.get(edgeLabel);
+					if (em != null) {
+						String edgeTable = em.table;
+						String srcTable = mapping.getTableForNode(varToNodeLabel.get(srcVar));
+						String tgtTable = mapping.getTableForNode(varToNodeLabel.get(tgtVar));
+
+						if (edgeTable.equals(srcTable) && edgeTable.equals(tgtTable)) {
+							String srcKeyCol = em.source.key;
+							String tgtKeyCol = em.target.key;
+							String srcRefKey = em.source.ref_key;
+							String tgtRefKey = em.target.ref_key;
+							if (srcKeyCol.equals(em.source.ref_key)) {
+								joinConditions.add(tgtVar + "." + tgtKeyCol + " = " + srcVar + "." + srcRefKey);
+							} else {
+								joinConditions.add(srcVar + "." + srcKeyCol + " = " + tgtVar + "." + tgtRefKey);
+							}
+						} else {
+							tablesList.add(edgeTable + " AS " + edgeVar);
+							joinConditions.add(edgeVar + "." + em.source.key + " = " + srcVar + "." + em.source.ref_key);
+							joinConditions.add(edgeVar + "." + em.target.key + " = " + tgtVar + "." + em.target.ref_key);
+						}
+					}
+				} else if (relName.startsWith("SIM_EDGE_") || relName.equals("SIM_EDGE")) {
+					String srcVar = a.getTerms().get(1).getVar();
+					String tgtVar = a.getTerms().get(2).getVar();
+					String op = Util.removeQuotes(a.getTerms().get(3).toString());
+					String threshold = a.getTerms().get(4).toString();
+
+					String srcLabel = varToNodeLabel.get(srcVar);
+					String tgtLabel = varToNodeLabel.get(tgtVar);
+
+					String srcEmbedCol = "gem_embed";
+					String tgtEmbedCol = "gem_embed";
+
+					SchemaMapping.PathQueryOverride override = mapping.getPathQueryOverride(srcLabel, tgtLabel);
+					if (override != null) {
+						SchemaMapping.EmbeddingInfo srcInfo = mapping.getEmbedding(srcLabel, override.source_embedding, null);
+						if (srcInfo != null) srcEmbedCol = srcInfo.column;
+						SchemaMapping.EmbeddingInfo tgtInfo = mapping.getEmbedding(tgtLabel, override.target_embedding, null);
+						if (tgtInfo != null) tgtEmbedCol = tgtInfo.column;
+					} else {
+						SchemaMapping.EmbeddingInfo srcInfo = mapping.getEmbedding(srcLabel, null, null);
+						if (srcInfo != null) srcEmbedCol = srcInfo.column;
+						SchemaMapping.EmbeddingInfo tgtInfo = mapping.getEmbedding(tgtLabel, null, null);
+						if (tgtInfo != null) tgtEmbedCol = tgtInfo.column;
+					}
+
+					String leftExpr = srcVar + "." + srcEmbedCol;
+					String rightExpr = tgtVar + "." + tgtEmbedCol;
+					if (dialect.equals("duckdb")) {
+						if (op.equals("<=>")) {
+							joinConditions.add("array_cosine_similarity(" + leftExpr + ", " + rightExpr + ") > " + threshold);
+						} else {
+							joinConditions.add("array_distance(" + leftExpr + ", " + rightExpr + ") < " + threshold);
+						}
+					} else {
+						if (op.equals("<=>")) {
+							joinConditions.add("1 - (" + leftExpr + " <=> " + rightExpr + ") > " + threshold);
+						} else {
+							joinConditions.add(leftExpr + " <-> " + rightExpr + " < " + threshold);
+						}
+					}
+				}
+			}
+		}
+
+		for (Atom a : c.getBody()) {
+			if (a.isInterpreted() == true) {
+				String op = a.getPredicate().getRelName();
+				String lop = a.getTerms().get(0).toString();
+				String rop = a.getTerms().get(1).toString();
+
+				String subLop = varToColumnExpr.containsKey(lop) ? varToColumnExpr.get(lop) : lop;
+				String subRop = varToColumnExpr.containsKey(rop) ? varToColumnExpr.get(rop) : rop;
+
+				subLop = subLop.replace("\"", "'");
+				subRop = subRop.replace("\"", "'");
+
+				joinConditions.add(subLop + " " + op + " " + subRop);
+			}
+		}
+
+		Atom head = c.getHead();
+		ArrayList<String> selects = new ArrayList<String>();
+		for (int i = 0; i < head.getTerms().size(); i++) {
+			String termVar = head.getTerms().get(i).getVar();
+			if (varToColumnExpr.containsKey(termVar)) {
+				selects.add(varToColumnExpr.get(termVar) + " AS _" + i);
+			} else if (varToNodeLabel.containsKey(termVar)) {
+				String pk = mapping.getPrimaryKeyForNode(varToNodeLabel.get(termVar));
+				selects.add(termVar + "." + pk + " AS _" + i);
+			} else {
+				selects.add(termVar + " AS _" + i);
+			}
+		}
+
+		StringBuilder sql = new StringBuilder();
+		sql.append("SELECT DISTINCT ");
+		for (int i = 0; i < selects.size(); i++) {
+			if (i > 0) sql.append(", ");
+			sql.append(selects.get(i));
+		}
+		sql.append(" FROM ");
+		for (int i = 0; i < tablesList.size(); i++) {
+			if (i > 0) sql.append(", ");
+			sql.append(tablesList.get(i));
+		}
+		if (joinConditions.size() > 0) {
+			sql.append(" WHERE ");
+			for (int i = 0; i < joinConditions.size(); i++) {
+				if (i > 0) sql.append(" AND ");
+				sql.append(joinConditions.get(i));
+			}
+		}
+		return sql.toString();
+	}
+
 	public String getSqlForDatalogClause(DatalogClause c) {
+		SchemaMapping mapping = Config.getSchemaMapping();
+		if (mapping != null) {
+			return getSqlForDatalogClauseWithMapping(c, mapping, mapping.target_dialect != null ? mapping.target_dialect : "postgresql");
+		}
 		/*
 		 * 1. Create a query with (multiple) join(s) from positive IDBs and interpreted atoms
 		 * 2. For each negative atom, augment the query with EXCEPT or LEFT JOIN 

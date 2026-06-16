@@ -275,11 +275,16 @@ public class Util {
 	 */
 	public static String removeQuotes(String str) {
 		String retStr = "";
-		if (str.length() > 2 && str.substring(0, 1).contentEquals("\"") 
-				&& str.substring(str.length()-1, str.length()).contentEquals("\"")) {
+		if (str.length() > 2) {
+			String first = str.substring(0, 1);
+			String last = str.substring(str.length()-1);
+			if ((first.contentEquals("\"") && last.contentEquals("\"")) || (first.contentEquals("'") && last.contentEquals("'"))) {
 				retStr = str.substring(1, str.length()-1);
-		} else {
+			} else {
 				retStr = str;
+			}
+		} else {
+			retStr = str;
 		}
 		return retStr;
 	}

@@ -13,6 +13,7 @@ import edu.upenn.cis.db.ConjunctiveQuery.Predicate;
 import edu.upenn.cis.db.ConjunctiveQuery.Term;
 import edu.upenn.cis.db.ConjunctiveQuery.Type;
 import edu.upenn.cis.db.helper.Util;
+import edu.upenn.cis.db.graphtrans.catalog.SchemaMapping;
 
 /**
  * Config.
@@ -138,6 +139,7 @@ public class Config {
 	public static Predicate predOpGe;
 	public static Predicate predOpLe;
 	public static Predicate predOpNeq;
+	public static Predicate predSimEdge;
 	// wide
 //	public static Predicate predN_w; 
 //	public static Predicate predE_w;
@@ -223,6 +225,13 @@ public class Config {
 		predEP.addArg("id", Type.Integer);
 		predEP.addArg("property", Type.String);
 		predEP.addArg("value", Type.String);
+
+		predSimEdge = new Predicate("SIM_EDGE");
+		predSimEdge.addArg("edge_var", Type.String);
+		predSimEdge.addArg("from", Type.String);
+		predSimEdge.addArg("to", Type.String);
+		predSimEdge.addArg("op", Type.String);
+		predSimEdge.addArg("threshold", Type.String);
 
 		// Currently, we assume every value (but ids) is String 
 		predOpEq = new Predicate("=", true);
@@ -401,5 +410,13 @@ public class Config {
 
 	public static void setUseIVM(boolean useIVM) {
 		Config.useIVM = useIVM;
+	}
+
+	private static SchemaMapping schemaMapping = null;
+	public static SchemaMapping getSchemaMapping() {
+		return schemaMapping;
+	}
+	public static void setSchemaMapping(SchemaMapping mapping) {
+		schemaMapping = mapping;
 	}
 }

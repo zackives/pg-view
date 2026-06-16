@@ -206,12 +206,14 @@ negation: '!';
 where_clause: 'WHERE' where_conditions;
 where_conditions: where_condition ('AND' where_condition)*;
 where_condition: lop operator rop;
-lop: var ('.' prop)?;
-rop: var ('.' prop)? | propValue | skolemFunction | array;
+lop: funcCall | var ('.' prop)?;
+rop: funcCall | var ('.' prop)? | propValue | skolemFunction | array;
+funcCall: ID ('.' ID)* '(' funcArg (',' funcArg)* ')';
+funcArg: lop | rop;
 array: '[' propValue (',' propValue)* ']';
 operator: '=' | '>' | '<' | '>=' | '<=' | '!=' | 'IN';
 prop : ID;
-propValue : int_or_literal;
+propValue : int_or_literal | FLOAT;
 skolemFunction: 'SK(' skolemFunctionName ',' var (',' var)* ')';
 skolemFunctionName: literal;
 
@@ -247,11 +249,16 @@ match_clause: 'MATCH' hop_or_terms;
 
 //hops: hop (',' hop)*; 
 hop: (negation)? term '-[' edge_term ']->' term;
-term: '(' term_body ')' | LEFTCPAREN term_body RIGHTCPAREN; // var (':' (label | star))?;
-term_body: var? (':' (label | star))?;
+term: '(' term_body ')' | LEFTCPAREN term_body RIGHTCPAREN;
+term_body: var? (':' (label | star))? properties?;
 
-edge_term:  edge_term_body | LEFTCPAREN edge_term_body RIGHTCPAREN; // var (':' (label | star))?;
-edge_term_body: var (':' (labelRegEx | star))?;
+edge_term:  edge_term_body | LEFTCPAREN edge_term_body RIGHTCPAREN;
+edge_term_body: var? (':' (labelRegEx | star))? properties?
+              | var? ':' SIM_OP properties?
+              ;
+
+properties: LEFTCPAREN property_pair (',' property_pair)* RIGHTCPAREN;
+property_pair: prop ':' propValue;
 
 
 // below is for very simple regEx on edge labels
@@ -414,11 +421,13 @@ integer: INTEGER;
 ip: INTEGER (PERIOD INTEGER)*;
 
 // https://github.com/leonchen83/antlr4-mysql/blob/master/MySQL.g4
-number:	(PLUS | MINUS)? (INTEGER) ;
+number:	(PLUS | MINUS)? (INTEGER | FLOAT) ;
 
 PERIOD: '.';
 PLUS: '+';
 MINUS: '-';
+SIM_OP: '<=>' | '<->' | '<+>';
+FLOAT: (PLUS | MINUS)? [0-9]+ '.' [0-9]+;
 INTEGER : [0-9]+;
 LEFTCPAREN: '{';
 RIGHTCPAREN: '}';
@@ -432,6 +441,6 @@ ID : [_a-zA-Z][_a-zA-Z0-9]* ; // match lower-case identifiers
 
 WS : [ \t\r\n]+ -> skip ; // skip spaces, tabs, newlines
 
-STRING : '"' [-.:/_a-zA-Z0-9]* '"';
+STRING : '"' (~[\\"\r\n] | '\\' .)* '"' | '\'' (~[\\'\r\n] | '\\' .)* '\'';
 
 

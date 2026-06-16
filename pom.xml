@@ -30,6 +30,13 @@
 			<version>42.6.0</version>
 		</dependency>
 
+		<!-- https://mvnrepository.com/artifact/org.duckdb/duckdb_jdbc -->
+		<dependency>
+			<groupId>org.duckdb</groupId>
+			<artifactId>duckdb_jdbc</artifactId>
+			<version>0.10.2</version>
+		</dependency>
+
 
 
 

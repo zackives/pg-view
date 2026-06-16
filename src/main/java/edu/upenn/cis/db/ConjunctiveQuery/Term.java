@@ -65,8 +65,11 @@ public class Term implements Cloneable {
 	public SimpleTerm getSimpleTerm() {
 		if (sterm == null && isVariable() == false) {
 //			System.out.println("var: " + var);
-			if (var.substring(0,1).contentEquals("\"") == true) {
+			String first = var.substring(0,1);
+			if (first.contentEquals("\"") == true || first.contentEquals("'") == true) {
 				sterm = new StringSimpleTerm(Util.removeQuotes(var));
+			} else if (var.contains(".")) {
+				sterm = new StringSimpleTerm(var);
 			} else {
 				System.out.println("var: " + var);
 				sterm = new LongSimpleTerm(Long.parseLong(var));
